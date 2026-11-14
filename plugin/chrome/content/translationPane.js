@@ -42,6 +42,25 @@ var TranslationPane = {
         }
         left.appendChild(langSelect);
 
+        if (Zotero.isWin) {
+            const deviceLabel = doc.createElement("label");
+            deviceLabel.className = "easytrans-label";
+            deviceLabel.textContent = Zotero.locale?.startsWith("ru") ? "Устройство" : "Device";
+            deviceLabel.htmlFor = "easytrans-device";
+            left.appendChild(deviceLabel);
+            const deviceSelect = doc.createElement("select");
+            deviceSelect.id = "easytrans-device";
+            deviceSelect.className = "easytrans-select";
+            for (const [value, label] of [["cpu", "CPU"], ["gpu", "GPU (CUDA)"]]) {
+                const option = doc.createElement("option");
+                option.value = value;
+                option.textContent = label;
+                deviceSelect.appendChild(option);
+            }
+            deviceSelect.value = Zotero.Prefs.get("extensions.easytrans.computeDevice") === "gpu" ? "gpu" : "cpu";
+            left.appendChild(deviceSelect);
+        }
+
         header.appendChild(left);
 
         const modelState = doc.createElement("div");
@@ -162,6 +181,10 @@ var TranslationPane = {
      * Bind event listeners
      */
     bindEvents(body) {
+        const deviceSelect = body.querySelector("#easytrans-device");
+        deviceSelect?.addEventListener("change", event => {
+            Zotero.Prefs.set("extensions.easytrans.computeDevice", event.target.value);
+        });
         // Language selection
         const langSelect = body.querySelector("#easytrans-target-lang");
         if (langSelect) {
@@ -234,8 +257,10 @@ var TranslationPane = {
 
         const downloadBtn = this.ensureSectionDownloadButton(body);
         if (downloadBtn) {
-            this.setDownloadButtonLabel(downloadBtn, downloadState.buttonLabel || "Download Model");
-            downloadBtn.disabled = !!downloadState.buttonDisabled;
+            const label = downloadState.isDownloaded ? "Model ready" :
+                downloadState.phase === "downloading" ? `Model: ${Math.round(downloadState.progressPercent || 0)}%` : "Model required";
+            this.setDownloadButtonLabel(downloadBtn, label);
+            downloadBtn.disabled = false;
             downloadBtn.dataset.mode = downloadState.buttonMode || "download";
             downloadBtn.dataset.phase = downloadState.phase || "idle";
             downloadBtn.classList.toggle("is-progress", downloadState.phase === "downloading");
@@ -317,25 +342,10 @@ var TranslationPane = {
     async handleDownloadModel(body) {
         try {
             const state = EasyTrans.getDownloadState?.();
-            if (state?.buttonMode === "cancel") {
-                EasyTrans.cancelModelDownload?.();
-                return;
-            }
-
-            if (state?.buttonDisabled) {
-                return;
-            }
-
-            if (state?.buttonMode === "ready") {
-                await EasyTrans.armModelRedownload?.();
-                return;
-            }
-
-            await EasyTrans.downloadModel(body.ownerDocument?.defaultView, {
-                forceRedownload: state?.buttonMode === "redownload"
-            });
+            if (state?.isDownloaded) return;
+            Zotero.Utilities.Internal.openPreferences("easytrans-preferences");
         } catch (error) {
-            this.updateStatus(body, "Error: " + error.message);
+            Services.prompt.alert(body.ownerDocument?.defaultView, "EasyTrans", "Open Zotero Settings > EasyTrans to download the translation model.");
         }
     },
 

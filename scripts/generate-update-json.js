@@ -10,7 +10,7 @@ const path = require('path');
 const MANIFEST_PATH = path.join(__dirname, '..', 'plugin', 'manifest.json');
 const OUTPUT_DIR = path.join(__dirname, '..');
 
-const REPO = 'binbinsh/zotero-easytrans';
+const REPO = 'hirolane/zotero-easytrans';
 const PLATFORMS = ['macos', 'windows', 'linux'];
 
 function main() {

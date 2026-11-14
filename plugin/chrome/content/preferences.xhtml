@@ -1,0 +1,25 @@
+<vbox onload="(Zotero_Preferences.getScope ? Zotero_Preferences.getScope('easytrans-preferences').EasyTransPreferences : EasyTransPreferences).init()">
+  <groupbox>
+    <label><html:h2>EasyTrans</html:h2></label>
+    <label control="easytrans-pref-device" id="easytrans-pref-device-label" value="Compute device" />
+    <menulist id="easytrans-pref-device">
+      <menupopup>
+        <menuitem value="cpu" label="CPU" />
+        <menuitem value="gpu" label="NVIDIA GPU (CUDA)" />
+      </menupopup>
+    </menulist>
+    <html:p id="easytrans-pref-cuda-status" aria-live="polite"></html:p>
+    <html:progress id="easytrans-pref-progress" max="100" value="0" hidden="hidden" />
+    <html:button id="easytrans-pref-download" type="button">Download CUDA components</html:button>
+    <html:button id="easytrans-pref-cancel" type="button" hidden="hidden">Cancel</html:button>
+    <html:button id="easytrans-pref-remove-cuda" type="button">Remove CUDA components</html:button>
+  </groupbox>
+  <groupbox>
+    <label><html:h2 id="easytrans-pref-storage-label">Storage</html:h2></label>
+    <html:p id="easytrans-pref-model-status" aria-live="polite"></html:p>
+    <html:progress id="easytrans-pref-model-progress" max="100" value="0" hidden="hidden" />
+    <html:button id="easytrans-pref-model-download" type="button">Download model</html:button>
+    <html:button id="easytrans-pref-remove-model" type="button">Remove translation model</html:button>
+    <html:p id="easytrans-pref-storage-status" aria-live="polite"></html:p>
+  </groupbox>
+</vbox>

@@ -18,6 +18,10 @@ var EasyTrans = {
     _summaryRefreshPending: false,
     _paneBodies: new Set(),
     _downloadStateUnsubscribe: null,
+    _devicePrefObserver: null,
+    _activeTranslation: null,
+    SUCCESS_PAUSE_MS: 500,
+    ESTIMATED_OUTPUT_TOKEN_MULTIPLIER: 3,
 
     // Supported languages
     LANGUAGES: {
@@ -46,11 +50,19 @@ var EasyTrans = {
         Zotero.debug("EasyTrans: Initializing...");
 
         try {
+            Services.scriptloader.loadSubScript(this.rootURI + "chrome/content/cudaRuntime.js");
             // Load model downloader module
             Services.scriptloader.loadSubScript(
                 this.rootURI + "chrome/content/modelDownloader.js"
             );
             this.modelDownloader = new ModelDownloader();
+            Zotero.EasyTransModelDownloader = this.modelDownloader;
+            this._devicePrefObserver = Zotero.Prefs.registerObserver("extensions.easytrans.computeDevice", value => {
+                for (const body of this._paneBodies) {
+                    const select = body.querySelector("#easytrans-device");
+                    if (select) select.value = value === "gpu" ? "gpu" : "cpu";
+                }
+            });
             this._downloadStateUnsubscribe = this.modelDownloader.subscribe(() => {
                 this.updateDownloadUI();
             });
@@ -112,6 +124,11 @@ var EasyTrans = {
 
         this._downloadStateUnsubscribe?.();
         this._downloadStateUnsubscribe = null;
+        if (this._devicePrefObserver) Zotero.Prefs.unregisterObserver(this._devicePrefObserver);
+        this._devicePrefObserver = null;
+        if (Zotero.EasyTransModelDownloader === this.modelDownloader) {
+            delete Zotero.EasyTransModelDownloader;
+        }
         this._paneBodies.clear();
 
         this.initialized = false;
@@ -173,9 +190,10 @@ var EasyTrans = {
     /**
      * Translate text using the LLM
      */
-    async translateText(text, sourceLang, targetLang) {
+    async translateText(text, sourceLang, targetLang, onProgress, job) {
         // Check cache first
         const cached = await this.translationCache?.get(text, sourceLang, targetLang);
+        job?.check();
         if (cached) {
             Zotero.debug("EasyTrans: Cache hit for translation");
             return cached;
@@ -185,14 +203,10 @@ var EasyTrans = {
         if (!this.llamaHelper?.isLoaded()) {
             await this.initializeInference();
         }
+        job?.check();
 
         // Translate
-        const result = await this.llamaHelper.translate(text, sourceLang, targetLang);
-
-        // Cache result
-        await this.translationCache?.set(text, sourceLang, targetLang, result);
-
-        return result;
+        return await this.llamaHelper.translate(text, sourceLang, targetLang, onProgress, job);
     },
 
     /**
@@ -338,6 +352,7 @@ var EasyTrans = {
     normalizeTranslation(text) {
         if (!text) return "";
         let normalized = text;
+        normalized = normalized.replace(/(?:\\n|\\r|[\\\s])*\\?<\\?\/?end_of_turn\s*>[\s\S]*$/i, "");
         normalized = normalized.replace(/^\s*(auto[- ]detected:.*|auto[- ]detected language:.*|detected language:.*)\s*$/gim, "");
         normalized = normalized.replace(/(^|\n)\s*(auto[- ]detected:.*|auto[- ]detected language:.*|detected language:.*)\s*(\n|$)/gim, "\n");
         normalized = normalized.replace(/\r\n/g, "\n");
@@ -372,6 +387,50 @@ var EasyTrans = {
         const style = doc.createElement("style");
         style.setAttribute("data-easytrans-inline", "true");
         style.textContent = `
+            .selection-popup .easytrans-selection-popup {
+                background: var(--material-toolbar, #f9f9f9) !important;
+                box-shadow: none !important;
+            }
+            .easytrans-selection-popup button.easytrans-translate-selection {
+                display: flex; align-items: center; box-sizing: border-box;
+                width: 100%; min-height: 24px; padding: 1px 4px;
+                font-size: 12px; text-align: start;
+            }
+            .easytrans-selection-popup .easytrans-translate-selection[hidden] { display: none !important; }
+            .easytrans-selection-popup .easytrans-translation-progress {
+                box-sizing: border-box; width: 100%; min-width: 0;
+                background: transparent !important;
+                color: var(--fill-primary, #263344); font-size: 12px;
+            }
+            .easytrans-selection-popup .easytrans-translation-progress[hidden] { display: none !important; }
+            .easytrans-selection-popup .easytrans-progress-row {
+                display: flex !important; flex-wrap: nowrap !important; align-items: center;
+                box-sizing: border-box; min-height: 24px; gap: 6px; padding: 1px 4px;
+                background: transparent !important; box-shadow: none !important;
+            }
+            .easytrans-selection-popup .easytrans-progress-label {
+                flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+                background: transparent !important;
+            }
+            .easytrans-selection-popup button.easytrans-progress-cancel {
+                display: inline-flex !important; flex: 0 0 22px !important; align-items: center;
+                justify-content: center; box-sizing: border-box; width: 22px !important;
+                min-width: 22px !important; height: 22px !important; padding: 0 !important;
+                margin: 0 !important; border: 0 !important; border-radius: 7px;
+                background: #fff0f0 !important; color: #d32030 !important;
+                font-size: 18px !important; font-weight: 600; line-height: 1; cursor: pointer;
+            }
+            .easytrans-selection-popup button.easytrans-progress-cancel:hover { background: #ffdddd !important; }
+            .easytrans-selection-popup button.easytrans-progress-cancel:disabled { opacity: .4; cursor: default; }
+            .easytrans-selection-popup button.easytrans-progress-cancel[hidden] { display: none !important; }
+            .easytrans-selection-popup .easytrans-progress-track { width: 100%; height: 5px; background: #e7ecf4; border-radius: 0; overflow: hidden; }
+            .easytrans-selection-popup .easytrans-progress-bar { height: 100%; background: #3068eb; transition: width .2s ease; }
+            .easytrans-selection-popup .easytrans-translation-progress[data-indeterminate="true"] .easytrans-progress-bar {
+                width: 35% !important; animation: easytrans-progress 1.2s ease-in-out infinite;
+            }
+            .easytrans-selection-popup .easytrans-translation-progress[data-state="done"] .easytrans-progress-bar { background: #0bb57c; }
+            @keyframes easytrans-progress { from { transform: translateX(-110%); } to { transform: translateX(300%); } }
+            @media (prefers-reduced-motion: reduce) { .easytrans-progress-bar { animation: none !important; transition: none; } }
             .easytrans-translation-popup {
                 position: fixed;
                 width: min(520px, calc(100vw - 40px));
@@ -521,7 +580,7 @@ var EasyTrans = {
                             const node = view._iframeWindow.document.getElementById("viewerContainer");
                             rectArr = view.getClientRectForPopup(position, node?.scrollLeft || 0, node?.scrollTop || 0);
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                     if (Array.isArray(rectArr) && rectArr.length >= 4) {
                         this._lastSelectionRect = {
                             left: rectArr[0],
@@ -773,13 +832,88 @@ var EasyTrans = {
 
                 const button = doc.createElement("button");
                 button.className = "easytrans-translate-selection";
-                button.textContent = "Translate";
+                button.textContent = "Translate selected text";
+
+                const progressBox = doc.createElement("div");
+                progressBox.className = "easytrans-translation-progress";
+                progressBox.hidden = true;
+                progressBox.setAttribute("role", "status");
+                progressBox.setAttribute("aria-live", "polite");
+
+                const progressText = doc.createElement("div");
+                progressText.className = "easytrans-progress-row";
+
+                const statusText = doc.createElement("span");
+                statusText.className = "easytrans-progress-label";
+                const cancelButton = doc.createElement("button");
+
+                cancelButton.type = "button";
+                cancelButton.className = "easytrans-progress-cancel";
+                cancelButton.textContent = "×";
+                cancelButton.title = Zotero.locale?.startsWith("ru") ? "Отменить перевод" : "Cancel translation";
+                cancelButton.setAttribute("aria-label", cancelButton.title);
+
+                progressText.appendChild(statusText);
+                progressText.appendChild(cancelButton);
+
+                const track = doc.createElement("div");
+                track.className = "easytrans-progress-track";
+
+                const bar = doc.createElement("div");
+                bar.className = "easytrans-progress-bar";
+
+                track.appendChild(bar);
+                progressBox.appendChild(progressText);
+                progressBox.appendChild(track);
+
+                const ru = Zotero.locale?.startsWith("ru");
+                let inputTokens = 0;
+                let estimate = 0;
+                const updateProgress = progress => {
+                    if (self._activeTranslation?.cancelled && progress.event !== "cancelled") return;
+                    progressBox.dataset.state = progress.event === "done" ? "done" : progress.event === "cancelled" ? "cancelled" : "working";
+                    if (progress.event === "loading") {
+                        const percent = Math.max(0, Math.min(100, Math.round(progress.percent || 0)));
+                        statusText.textContent = ru ? "Загрузка модели…" : "Loading model…";
+                        progressBox.dataset.indeterminate = "false";
+                        bar.style.width = `${percent}%`;
+                    } else if (progress.event === "processing") {
+                        inputTokens = Math.max(0, Math.floor(progress.input_tokens || 0));
+                        statusText.textContent = ru ? "Обработка текста…" : "Processing text…";
+                        progressBox.dataset.indeterminate = "true";
+                    } else if (progress.event === "generating") {
+                        const tokens = Math.max(0, Math.floor(progress.tokens || 0));
+                        statusText.textContent = ru ? `Перевод: ${tokens} токенов` : `Translating: ${tokens} tokens`;
+                        progressBox.dataset.indeterminate = inputTokens ? "false" : "true";
+                        if (inputTokens) {
+                            estimate = Math.max(estimate, Math.min(95, Math.floor(tokens / (inputTokens * self.ESTIMATED_OUTPUT_TOKEN_MULTIPLIER) * 95)));
+                            bar.style.width = `${estimate}%`;
+                        }
+                    } else if (progress.event === "saving") {
+                        statusText.textContent = ru ? "Сохранение аннотации…" : "Saving annotation…";
+                        cancelButton.disabled = true;
+                    } else if (progress.event === "done") {
+                        statusText.textContent = ru ? "Переведено" : "Translated";
+                        progressBox.dataset.indeterminate = "false";
+                        bar.style.width = "100%";
+                        cancelButton.hidden = true;
+                    } else if (progress.event === "cancelled") {
+                        statusText.textContent = ru ? "Перевод отменён" : "Translation cancelled";
+                        progressBox.dataset.indeterminate = "false";
+                        bar.style.width = "0%";
+                        cancelButton.disabled = true;
+                    } else {
+                        statusText.textContent = ru ? "Запуск переводчика…" : "Starting translator…";
+                        progressBox.dataset.indeterminate = "true";
+                    }
+                };
 
                 container.addEventListener("click", (event) => {
                     if (event.target === button || button.contains(event.target)) return;
                     button.click();
                 });
                 container.addEventListener("keydown", (event) => {
+                    if (event.target === cancelButton || cancelButton.contains(event.target)) return;
                     if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         button.click();
@@ -788,40 +922,98 @@ var EasyTrans = {
 
                 button.addEventListener("click", async (event) => {
                     event.stopPropagation();
+                    if (self._activeTranslation) {
+                        const active = self._activeTranslation;
+                        if (active.phase === "saving" || active.phase === "done") {
+                            Services.prompt.alert(doc.defaultView, "EasyTrans", ru ? "Перевод уже завершается." : "A translation is finishing.");
+                        } else if (active.cancelled) {
+                            Services.prompt.alert(doc.defaultView, "EasyTrans", ru ? "Отмена перевода выполняется. Подождите немного." : "Translation cancellation is in progress. Please wait.");
+                        } else if (Services.prompt.confirm(doc.defaultView, "EasyTrans", ru ? "Уже выполняется перевод. Отменить его?" : "A translation is already running. Cancel it?")) {
+                            active.cancel();
+                        }
+                        return;
+                    }
+                    const job = {
+                        cancelled: false,
+                        phase: "translating",
+                        check() {
+                            if (this.cancelled) {
+                                const error = new Error("Translation cancelled");
+                                error.name = "AbortError";
+                                throw error;
+                            }
+                        },
+                        cancel() {
+                            if (this.cancelled || this.phase !== "translating") return;
+                            this.cancelled = true;
+                            updateProgress({ event: "cancelled" });
+                            self.llamaHelper?.cancelCurrent();
+                        }
+                    };
+                    self._activeTranslation = job;
+                    cancelButton.disabled = false;
+                    cancelButton.hidden = false;
+                    cancelButton.onclick = cancelEvent => {
+                        cancelEvent.preventDefault();
+                        cancelEvent.stopPropagation();
+                        job.cancel();
+                    };
+                    inputTokens = 0;
+                    estimate = 0;
+                    bar.style.width = "0%";
                     button.disabled = true;
-                    const originalLabel = button.textContent;
-                    button.textContent = "Translating...";
+                    button.hidden = true;
+                    progressBox.hidden = false;
+                    updateProgress({ event: "starting" });
                     let stage = "initializing translation components";
                     try {
                         await self.initializeComponents();
+                        job.check();
                         const targetLang = Zotero.Prefs.get("extensions.easytrans.targetLanguage") || "zh-CN";
                         stage = "translating text";
-                        const translated = await self.translateText(selectionText, "auto", targetLang);
+                        const translated = await self.translateText(selectionText, "auto", targetLang, updateProgress, job);
+                        job.check();
                         const normalized = self.normalizeTranslation(translated);
 
                         stage = "saving annotation";
-                        await self.createTranslationAnnotation(reader, params.annotation, normalized || translated, targetLang);
+                        job.phase = "saving";
+                        updateProgress({ event: "saving" });
+                        const annotation = await self.createTranslationAnnotation(reader, params.annotation, normalized || translated, targetLang);
+                        if (!annotation) throw new Error("Failed to save translation annotation");
+                        try { await self.translationCache?.set(selectionText, "auto", targetLang, translated); }
+                        catch (cacheError) { Zotero.logError(cacheError); }
+                        job.phase = "done";
+                        updateProgress({ event: "done" });
+                        await new Promise(resolve => setTimeout(resolve, self.SUCCESS_PAUSE_MS));
                         self.showTranslationPopup(doc, normalized || translated, targetLang);
                         if (self._refreshPane) {
                             self._refreshPane();
                         }
                     } catch (e) {
-                        const detail = e?.message || String(e);
-                        const message = `Translation failed while ${stage}: ${detail}`;
-                        Zotero.debug("EasyTrans: " + message);
-                        Zotero.logError(e);
-                        try {
-                            Services.prompt.alert(doc.defaultView, "EasyTrans Error", message);
-                        } catch (alertError) {
-                            self.showTranslationPopup(doc, message, "error", true);
+                        if (job.cancelled || e?.name === "AbortError") {
+                            updateProgress({ event: "cancelled" });
+                            await new Promise(resolve => setTimeout(resolve, self.SUCCESS_PAUSE_MS));
+                        } else {
+                            const detail = e?.message || String(e);
+                            const message = `Translation failed while ${stage}: ${detail}`;
+                            Zotero.debug("EasyTrans: " + message);
+                            Zotero.logError(e);
+                            try {
+                                Services.prompt.alert(doc.defaultView, "EasyTrans Error", message);
+                            } catch (alertError) {
+                                self.showTranslationPopup(doc, message, "error", true);
+                            }
                         }
                     } finally {
+                        if (self._activeTranslation === job) self._activeTranslation = null;
                         button.disabled = false;
-                        button.textContent = originalLabel;
+                        button.hidden = false;
+                        progressBox.hidden = true;
                     }
                 });
 
                 container.appendChild(button);
+                container.appendChild(progressBox);
                 append(container);
             }, this.id);
 
@@ -852,7 +1044,7 @@ var EasyTrans = {
                     section.label = desired;
                     section.setAttribute("label", desired);
                 }
-            } catch (e) {}
+            } catch (e) { }
         };
 
         // Register Item Pane Section

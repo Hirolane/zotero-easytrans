@@ -3,12 +3,12 @@
     "easytrans@zotero-easytrans": {
       "updates": [
         {
-          "version": "26.0310.1242",
-          "update_link": "https://github.com/binbinsh/zotero-easytrans/releases/download/v26.0310.1242/zotero-easytrans-linux.xpi",
+          "version": "26.1115.0109",
+          "update_link": "https://github.com/hirolane/zotero-easytrans/releases/download/v26.1115.0109/zotero-easytrans-linux.xpi",
           "applications": {
             "zotero": {
               "strict_min_version": "7.0",
-              "strict_max_version": "8.0.*"
+              "strict_max_version": "10.0.*"
             }
           }
         }

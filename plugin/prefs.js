@@ -1,5 +1,6 @@
 // Default preferences for EasyTrans
 pref("extensions.easytrans.targetLanguage", "zh-CN");
+pref("extensions.easytrans.computeDevice", "cpu");
 pref("extensions.easytrans.sourceLangAuto", true);
 pref("extensions.easytrans.modelPath", "");
 pref("extensions.easytrans.contextSize", 4096);

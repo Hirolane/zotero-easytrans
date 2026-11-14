@@ -2,7 +2,14 @@
 
 Zotero EasyTrans is a Zotero 10 plugin for offline translation of selected PDF text using the [TranslateGemma](https://blog.google/innovation-and-ai/technology/developers-tools/translategemma/) 4B on-device translation model.
 
-## Screenshots
+## Showcase
+
+<p align="center">
+  <img src="docs/screenshots/plugin_showcase.gif" alt="Zotero EasyTrans plugin showcase" />
+</p>
+
+<details>
+<summary>View screenshots</summary>
 
 <p align="center">
   <img src="docs/screenshots/01-selection.png" alt="Selection translate popup" width="320" /><br>
@@ -24,6 +31,13 @@ Zotero EasyTrans is a Zotero 10 plugin for offline translation of selected PDF t
   <sub>Translation result bubble</sub>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/05-settings.jpg" alt="Selection translate popup" width="540" /><br>
+  <sub>Settings options</sub>
+</p>
+
+</details>
+
 ## What It Does
 Translate selected text inside Zotero's PDF reader and save the translation as an annotation.
 
@@ -44,16 +58,28 @@ Translate selected text inside Zotero's PDF reader and save the translation as a
 English, Simplified Chinese, Traditional Chinese, Hindi, Spanish, Arabic, French, Portuguese, Russian, German, Japanese, Korean, Italian, Dutch
 
 ## How To Use
-1. Download the XPI for your platform from [GitHub Releases](https://github.com/binbinsh/zotero-easytrans/releases/latest):
+1. Download the XPI for your platform from [GitHub Releases](https://github.com/hirolane/zotero-easytrans/releases/latest):
    - **macOS**: `zotero-easytrans-macos.xpi`
    - **Windows**: `zotero-easytrans-windows.xpi`
    - **Linux**: `zotero-easytrans-linux.xpi`
-2. Install the downloaded XPI in Zotero 8 (Tools → Add-ons → Install Add-on From File).
+2. Install the downloaded XPI in Zotero 10 (Tools → Add-ons → Install Add-on From File).
 3. Open a PDF item
-3. On first use, download the TranslateGemma 4B model (~2.5 GB) from `EasyTrans` panel in the right-hand sidebar of the item pane.
-4. Select a target language in the `EasyTrans` panel.
-5. Select text in the PDF, click `Translate`, and the translation will show and be saved as an annotation.
-6. The panel lists all translated selections.
+4. On first use, download the TranslateGemma 4B model (~2.5 GB) from `EasyTrans` panel in the right-hand sidebar of the item pane.
+
+   > **Optional: Using GPU instead CPU (Windows)**
+   >
+   > To use GPU, download the CUDA library (~500 MB)
+   > in plugin settings (Edit → Settings → EasyTrans → Download CUDA components).
+
+5. Select a target language in the `EasyTrans` panel.
+6. Select text in the PDF, click `Translate`, and the translation will show and be saved as an annotation.
+7. The panel lists all translated selections.
+
+## Todo
+- Add Linux and MacOS GPU support (if possible)
+
+## Acknowledgments
+This fork is based on the [original Zotero EasyTrans plugin repo](https://github.com/binbinsh/zotero-easytrans) by **[Binbinsh](https://github.com/binbinsh)**. Many thanks to the original author!
 
 ## License
 MIT

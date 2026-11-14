@@ -42,6 +42,15 @@ async function startup({ id, version, rootURI }) {
 
     try {
         await EasyTrans.init();
+        if (Zotero.isWin) {
+            await Zotero.PreferencePanes.register({
+                pluginID: id,
+                id: "easytrans-preferences",
+                label: "EasyTrans",
+                src: rootURI + "chrome/content/preferences.xhtml",
+                scripts: [rootURI + "chrome/content/cudaRuntime.js", rootURI + "chrome/content/preferences.js"]
+            });
+        }
         Zotero.debug("EasyTrans: Plugin initialized successfully");
     } catch (e) {
         Zotero.debug("EasyTrans: Init failed - " + e.message);

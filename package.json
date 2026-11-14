@@ -1,17 +1,18 @@
 {
   "name": "zotero-easytrans",
-  "version": "26.0310.1242",
-  "description": "Offline translation plugin for Zotero 8 using TranslateGemma 4B",
+  "version": "26.1115.0109",
+  "description": "Offline translation plugin for Zotero 10 using TranslateGemma 4B",
   "main": "scripts/build.js",
   "scripts": {
     "build": "node scripts/build.js",
+    "build:versioned": "node scripts/build-versioned.js",
     "bundle-native": "node scripts/bundle-native.js",
     "bundle-all": "node scripts/bundle-native.js && node scripts/build.js",
     "generate-update": "node scripts/generate-update-json.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zotero-easytrans/zotero-easytrans.git"
+    "url": "git+https://github.com/Hirolane/zotero-easytrans.git"
   },
   "keywords": [
     "zotero",
@@ -24,8 +25,8 @@
   "license": "MIT",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/zotero-easytrans/zotero-easytrans/issues"
+    "url": "https://github.com/Hirolane/zotero-easytrans/issues"
   },
-  "homepage": "https://github.com/zotero-easytrans/zotero-easytrans#readme",
+  "homepage": "https://github.com/Hirolane/zotero-easytrans#readme",
   "dependencies": {}
 }

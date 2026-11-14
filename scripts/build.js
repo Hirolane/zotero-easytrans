@@ -13,9 +13,9 @@ const BUILD_DIR = path.join(PLUGIN_DIR, 'build');
 const OUTPUT_FILE = path.join(__dirname, '..', 'zotero-easytrans.xpi');
 
 const UPDATE_URL_MAP = {
-    macos: 'https://raw.githubusercontent.com/binbinsh/zotero-easytrans/main/update-macos.json',
-    windows: 'https://raw.githubusercontent.com/binbinsh/zotero-easytrans/main/update-windows.json',
-    linux: 'https://raw.githubusercontent.com/binbinsh/zotero-easytrans/main/update-linux.json'
+    macos: 'https://raw.githubusercontent.com/hirolane/zotero-easytrans/main/update-macos.json',
+    windows: 'https://raw.githubusercontent.com/hirolane/zotero-easytrans/main/update-windows.json',
+    linux: 'https://raw.githubusercontent.com/hirolane/zotero-easytrans/main/update-linux.json'
 };
 
 // Files and directories to include in the XPI

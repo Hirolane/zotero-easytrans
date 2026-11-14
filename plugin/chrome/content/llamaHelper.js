@@ -5,7 +5,7 @@
 
 class LlamaHelper {
     constructor() {
-        this._nativeCacheRevision = "20260310-1";
+        this._nativeCacheRevision = "20260310-cuda-test-1";
         this._initialized = false;
         this._tmpDir = null;
         this._helperPath = null;
@@ -45,27 +45,40 @@ class LlamaHelper {
         this._nativeReady = false;
     }
 
-    async translate(text, sourceLang, targetLang) {
+    async translate(text, sourceLang, targetLang, onProgress, job) {
         if (!this._initialized || !this._modelPath) {
             throw new Error("Model not loaded");
         }
 
         const task = async () => {
+            onProgress?.({ event: "starting" });
             await this._extractAll();
-            await this._startServer(this._modelPath, this._contextSize, this._maxTokensDefault);
+            job?.check();
+            await this._startServer(this._modelPath, this._contextSize, this._maxTokensDefault, job);
             try {
+                job?.check();
                 const sourceLangName = this.getLanguageName(sourceLang);
                 const targetLangName = this.getLanguageName(targetLang);
                 const prompt = this.buildTranslationPrompt(text, sourceLangName, targetLangName);
                 const maxTokens = this.estimateMaxTokens(text);
 
-                const res = await this._send({ type: "translate", prompt, max_tokens: maxTokens }, true);
+                let res;
+                try {
+                    res = await this._send({ type: "translate", prompt, source_text: text, max_tokens: maxTokens }, true, onProgress);
+                } catch (e) {
+                    job?.check();
+                    if (Zotero.isWin && Zotero.Prefs.get("extensions.easytrans.computeDevice") === "gpu") {
+                        throw new Error((e?.message || String(e)) + ". Select CPU in Zotero Settings > EasyTrans to continue.");
+                    }
+                    throw e;
+                }
+                job?.check();
                 if (!res.ok) {
                     throw new Error(res.error || "Translation failed");
                 }
                 return this.cleanTranslationResponse(res.text || "");
             } finally {
-                await this._stopProcess();
+                await this._stopProcess(!!job?.cancelled);
             }
         };
 
@@ -92,6 +105,7 @@ class LlamaHelper {
 
     cleanTranslationResponse(response) {
         let out = String(response || "");
+        out = out.replace(/(?:\\n|\\r|[\\\s])*\\?<\\?\/?end_of_turn\s*>[\s\S]*$/i, "");
         out = out.replace(/<start_of_turn>|<end_of_turn>|<eos>/g, "");
         out = out.replace(/<\/?2[^>]+>/g, "");
         out = out.replace(/^\s*model\s*:?\s*/i, "");
@@ -166,7 +180,6 @@ class LlamaHelper {
 
     async _extractAll() {
         const nativeDir = this._getNativeDir();
-        await this._cleanupOldNativeDirs();
         await IOUtils.makeDirectory(nativeDir, { createAncestors: true, ignoreExisting: true, permissions: 0o755 });
         const helperPath = PathUtils.join(nativeDir, this._getHelperName());
 
@@ -269,16 +282,22 @@ class LlamaHelper {
         }
     }
 
-    async _startServer(modelPath, contextSize, maxTokens) {
+    async _startServer(modelPath, contextSize, maxTokens, job) {
         if (this._proc) {
             try { this._proc.kill(); } catch {}
             this._proc = null;
         }
 
+        const device = Zotero.isWin && Zotero.Prefs.get("extensions.easytrans.computeDevice") === "gpu" ? "gpu" : "cpu";
+        if (Zotero.isWin && device === "gpu") {
+            await CudaRuntime.prepare(this._tmpDir);
+        }
+        job?.check();
         const { Subprocess } = ChromeUtils.importESModule("resource://gre/modules/Subprocess.sys.mjs");
 
         const args = [
             "--server",
+            "--progress",
             "--model",
             modelPath,
             "--backend-dir",
@@ -288,6 +307,10 @@ class LlamaHelper {
             "--max-tokens",
             String(maxTokens || 2048)
         ];
+
+        if (Zotero.isWin) {
+            args.push("--device", device);
+        }
 
         this._proc = await Subprocess.call({
             command: this._helperPath,
@@ -299,6 +322,11 @@ class LlamaHelper {
             environmentAppend: true
         });
 
+        if (job?.cancelled) {
+            await this._stopProcess(true);
+            job.check();
+        }
+
         this._stdoutBuffer = "";
         this._stderrBuffer = "";
 
@@ -306,7 +334,7 @@ class LlamaHelper {
         this._stderrTask = this._drainStderr();
     }
 
-    async _send(payload, skipQueue) {
+    async _send(payload, skipQueue, onProgress) {
         if (!this._proc) {
             throw new Error("Helper process not started");
         }
@@ -317,17 +345,22 @@ class LlamaHelper {
             const line = JSON.stringify(msg) + "\n";
             await this._proc.stdin.write(line);
 
-            const respLine = await this._readLine();
-            if (!respLine) {
-                throw new Error(this._buildEmptyResponseError());
+            while (true) {
+                const respLine = await this._readLine();
+                if (!respLine) throw new Error(this._buildEmptyResponseError());
+                let resp;
+                try {
+                    resp = JSON.parse(respLine);
+                } catch {
+                    throw new Error("Helper returned invalid JSON");
+                }
+                if (resp.event) {
+                    if (resp.id == null || resp.id === id) onProgress?.(resp);
+                    continue;
+                }
+                if (resp.id !== id) throw new Error("Helper returned an unexpected response ID");
+                return resp;
             }
-            let resp;
-            try {
-                resp = JSON.parse(respLine);
-            } catch {
-                throw new Error("Helper returned invalid JSON");
-            }
-            return resp;
         };
 
         if (skipQueue) {
@@ -396,13 +429,21 @@ class LlamaHelper {
             : "Helper exited before responding";
     }
 
-    async _stopProcess() {
+    cancelCurrent() {
         if (this._proc) {
+            try { Promise.resolve(this._proc.kill(0)).catch(() => {}); } catch {}
+        }
+    }
+
+    async _stopProcess(force = false) {
+        if (this._proc) {
+            if (!force) {
+                try {
+                    await this._send({ type: "shutdown" }, true);
+                } catch {}
+            }
             try {
-                await this._send({ type: "shutdown" }, true);
-            } catch {}
-            try {
-                this._proc.kill();
+                await this._proc.kill(0);
             } catch {}
         }
         this._stderrTask = null;

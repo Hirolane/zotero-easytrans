@@ -222,6 +222,48 @@ static char *json_strdup(const char *json, jsmntok_t *tok) {
     return s;
 }
 
+// Decode JSON string escapes when counting the user's selected text.
+static char *json_source_strdup(const char *json, jsmntok_t *tok) {
+    int len = tok->end - tok->start;
+    const char *input = json + tok->start;
+    char *out = (char *)malloc((size_t)len + 1);
+    if (!out) return NULL;
+    int n = 0;
+    for (int i = 0; i < len; i++) {
+        char c = input[i];
+        if (c == '\\' && i + 1 < len) {
+            c = input[++i];
+            switch (c) {
+                case 'n': c = '\n'; break;
+                case 'r': c = '\r'; break;
+                case 't': c = '\t'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'u': {
+                    if (i + 4 >= len) { free(out); return NULL; }
+                    char hex[5] = { input[i + 1], input[i + 2], input[i + 3], input[i + 4], 0 };
+                    unsigned long cp = strtoul(hex, NULL, 16);
+                    i += 4;
+                    if (cp >= 0xd800 && cp <= 0xdbff && i + 6 < len && input[i + 1] == '\\' && input[i + 2] == 'u') {
+                        char lowhex[5] = { input[i + 3], input[i + 4], input[i + 5], input[i + 6], 0 };
+                        unsigned long low = strtoul(lowhex, NULL, 16);
+                        if (low >= 0xdc00 && low <= 0xdfff) { cp = 0x10000 + ((cp - 0xd800) << 10) + low - 0xdc00; i += 6; }
+                    }
+                    if (cp >= 0xd800 && cp <= 0xdfff) cp = 0xfffd;
+                    if (cp < 0x80) out[n++] = (char)cp;
+                    else if (cp < 0x800) { out[n++] = (char)(0xc0 | (cp >> 6)); out[n++] = (char)(0x80 | (cp & 0x3f)); }
+                    else if (cp < 0x10000) { out[n++] = (char)(0xe0 | (cp >> 12)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3f)); out[n++] = (char)(0x80 | (cp & 0x3f)); }
+                    else { out[n++] = (char)(0xf0 | (cp >> 18)); out[n++] = (char)(0x80 | ((cp >> 12) & 0x3f)); out[n++] = (char)(0x80 | ((cp >> 6) & 0x3f)); out[n++] = (char)(0x80 | (cp & 0x3f)); }
+                    continue;
+                }
+            }
+        }
+        out[n++] = c;
+    }
+    out[n] = '\0';
+    return out;
+}
+
 static int json_toint(const char *json, jsmntok_t *tok) {
     int len = tok->end - tok->start;
     char tmp[64];
@@ -232,7 +274,7 @@ static int json_toint(const char *json, jsmntok_t *tok) {
     return atoi(tmp);
 }
 
-static int parse_request(const char *json, size_t len, int *out_id, char **out_type, char **out_prompt, int *out_max_tokens) {
+static int parse_request(const char *json, size_t len, int *out_id, char **out_type, char **out_prompt, char **out_source, int *out_max_tokens) {
     jsmn_parser parser;
     int tokcount = 128;
     jsmntok_t *toks = NULL;
@@ -257,11 +299,13 @@ static int parse_request(const char *json, size_t len, int *out_id, char **out_t
     int id_tok = json_find_key(json, toks, 0, "id");
     int type_tok = json_find_key(json, toks, 0, "type");
     int prompt_tok = json_find_key(json, toks, 0, "prompt");
+    int source_tok = json_find_key(json, toks, 0, "source_text");
     int max_tok = json_find_key(json, toks, 0, "max_tokens");
 
     if (id_tok >= 0) *out_id = json_toint(json, &toks[id_tok]);
     if (type_tok >= 0) *out_type = json_strdup(json, &toks[type_tok]);
     if (prompt_tok >= 0) *out_prompt = json_strdup(json, &toks[prompt_tok]);
+    if (source_tok >= 0) *out_source = json_source_strdup(json, &toks[source_tok]);
     if (max_tok >= 0 && out_max_tokens) *out_max_tokens = json_toint(json, &toks[max_tok]);
 
     free(toks);
@@ -407,7 +451,21 @@ static char *detokenize(const struct llama_vocab *vocab, const int *tokens, int 
     return out;
 }
 
-static char *translate_prompt(struct llama_context *ctx, struct llama_model *model, const char *prompt, int max_tokens) {
+static int report_progress = 0;
+
+static bool model_progress(float progress, void *user_data) {
+    (void)user_data;
+    static int previous = -1;
+    int percent = (int)(progress * 100.0f);
+    if (report_progress && percent != previous) {
+        fprintf(stdout, "{\"event\":\"loading\",\"percent\":%d}\n", percent);
+        fflush(stdout);
+        previous = percent;
+    }
+    return true;
+}
+
+static char *translate_prompt(struct llama_context *ctx, struct llama_model *model, const char *prompt, const char *source, int max_tokens, int request_id) {
     const struct llama_vocab *vocab = llama_model_get_vocab(model);
     int n_vocab = llama_vocab_n_tokens(vocab);
     llama_memory_t mem = llama_get_memory(ctx);
@@ -435,6 +493,13 @@ static char *translate_prompt(struct llama_context *ctx, struct llama_model *mod
         batch.logits[i] = (i == n_tokens - 1) ? 1 : 0;
     }
 
+    if (report_progress) {
+        int source_tokens = source ? llama_tokenize(vocab, source, (int)strlen(source), NULL, 0, false, false) : 0;
+        if (source_tokens < 0 && source_tokens != INT_MIN) source_tokens = -source_tokens;
+        if (source_tokens < 1) source_tokens = 1;
+        fprintf(stdout, "{\"event\":\"processing\",\"id\":%d,\"input_tokens\":%d}\n", request_id, source_tokens);
+        fflush(stdout);
+    }
     int res = llama_decode(ctx, batch);
     llama_batch_free(batch);
     if (res != 0) {
@@ -461,6 +526,11 @@ static char *translate_prompt(struct llama_context *ctx, struct llama_model *mod
             out_tokens = tmp;
         }
         out_tokens[out_len++] = new_tok;
+
+        if (report_progress && (out_len == 1 || out_len % 4 == 0)) {
+            fprintf(stdout, "{\"event\":\"generating\",\"id\":%d,\"tokens\":%d}\n", request_id, out_len);
+            fflush(stdout);
+        }
 
         struct llama_batch one = llama_batch_init(1, 0, 1);
         one.n_tokens = 1;
@@ -491,13 +561,23 @@ int main(int argc, char **argv) {
     int context_size = 4096;
     int max_tokens = 2048;
     int server = 0;
+    int cpu_only = 0;
+    int require_gpu = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) { model_path = argv[++i]; continue; }
         if (strcmp(argv[i], "--backend-dir") == 0 && i + 1 < argc) { backend_dir_arg = argv[++i]; continue; }
         if (strcmp(argv[i], "--context") == 0 && i + 1 < argc) { context_size = atoi(argv[++i]); continue; }
         if (strcmp(argv[i], "--max-tokens") == 0 && i + 1 < argc) { max_tokens = atoi(argv[++i]); continue; }
+        if (strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
+            const char *device = argv[++i];
+            if (strcmp(device, "cpu") == 0) cpu_only = 1;
+            else if (strcmp(device, "gpu") == 0) require_gpu = 1;
+            else { die("Unknown device"); return 1; }
+            continue;
+        }
         if (strcmp(argv[i], "--server") == 0) { server = 1; continue; }
+        if (strcmp(argv[i], "--progress") == 0) { report_progress = 1; continue; }
     }
 
     if (!server || !model_path) {
@@ -515,11 +595,19 @@ int main(int argc, char **argv) {
     }
     ggml_backend_load_all_from_path(backend_dir[0] ? backend_dir : NULL);
 
+    if (require_gpu && !ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU)) {
+        die("GPU requested but CUDA backend or compatible GPU is unavailable");
+        return 1;
+    }
+
     struct llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = -1;
+    ggml_backend_dev_t cpu_devices[] = { NULL };
+    if (cpu_only) mparams.devices = cpu_devices;
+    mparams.n_gpu_layers = cpu_only ? 0 : -1;
     mparams.main_gpu = 0;
     mparams.use_mmap = true;
     mparams.use_mlock = false;
+    if (report_progress) mparams.progress_callback = model_progress;
 
     struct llama_model *model = llama_model_load_from_file(model_path, mparams);
     if (!model) {
@@ -543,8 +631,8 @@ int main(int argc, char **argv) {
     if (batch < 128) batch = 128;
     cparams.n_batch = batch;
     cparams.n_ubatch = batch;
-    cparams.offload_kqv = true;
-    cparams.op_offload = true;
+    cparams.offload_kqv = !cpu_only;
+    cparams.op_offload = !cpu_only;
     int n_threads = get_cpu_count();
     cparams.n_threads = n_threads;
     cparams.n_threads_batch = n_threads;
@@ -567,12 +655,14 @@ int main(int argc, char **argv) {
         int id = 0;
         char *type = NULL;
         char *prompt = NULL;
+        char *source = NULL;
         int req_max_tokens = 0;
-        if (parse_request(line, (size_t)strlen(line), &id, &type, &prompt, &req_max_tokens) != 0) {
+        if (parse_request(line, (size_t)strlen(line), &id, &type, &prompt, &source, &req_max_tokens) != 0) {
             fprintf(stdout, "{\"id\":%d,\"ok\":false,\"error\":\"invalid request\"}\n", id);
             fflush(stdout);
             free(type);
             free(prompt);
+            free(source);
             continue;
         }
 
@@ -581,6 +671,7 @@ int main(int argc, char **argv) {
             fflush(stdout);
             free(type);
             free(prompt);
+            free(source);
             break;
         }
 
@@ -589,11 +680,12 @@ int main(int argc, char **argv) {
             fflush(stdout);
             free(type);
             free(prompt);
+            free(source);
             continue;
         }
 
         int use_max_tokens = req_max_tokens > 0 ? req_max_tokens : max_tokens;
-        char *result = translate_prompt(ctx, model, prompt, use_max_tokens);
+        char *result = translate_prompt(ctx, model, prompt, source, use_max_tokens, id);
         if (!result) {
             fprintf(stdout, "{\"id\":%d,\"ok\":false,\"error\":\"translation failed\"}\n", id);
         } else {
@@ -605,6 +697,7 @@ int main(int argc, char **argv) {
         fflush(stdout);
         free(type);
         free(prompt);
+        free(source);
     }
 
     free(line);
