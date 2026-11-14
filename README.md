@@ -1,6 +1,6 @@
 # Zotero EasyTrans
 
-Zotero EasyTrans is a Zotero 8 plugin for offline translation of selected PDF text using the [TranslateGemma](https://blog.google/innovation-and-ai/technology/developers-tools/translategemma/) 4B on-device translation model.
+Zotero EasyTrans is a Zotero 10 plugin for offline translation of selected PDF text using the [TranslateGemma](https://blog.google/innovation-and-ai/technology/developers-tools/translategemma/) 4B on-device translation model.
 
 ## Screenshots
 
