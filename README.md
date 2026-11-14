@@ -49,8 +49,9 @@ English, Simplified Chinese, Traditional Chinese, Hindi, Spanish, Arabic, French
    - **Windows**: `zotero-easytrans-windows.xpi`
    - **Linux**: `zotero-easytrans-linux.xpi`
 2. Install the downloaded XPI in Zotero 8 (Tools → Add-ons → Install Add-on From File).
-3. On first use, download the TranslateGemma 4B model (~2.5 GB).
-4. Open a PDF item and select a target language in the `EasyTrans` panel.
+3. Open a PDF item
+3. On first use, download the TranslateGemma 4B model (~2.5 GB) from `EasyTrans` panel in the right-hand sidebar of the item pane.
+4. Select a target language in the `EasyTrans` panel.
 5. Select text in the PDF, click `Translate`, and the translation will show and be saved as an annotation.
 6. The panel lists all translated selections.
 

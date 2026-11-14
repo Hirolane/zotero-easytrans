@@ -206,8 +206,7 @@ class LlamaHelper {
             this._getPlatform() +
             "/" +
             this._getHelperName();
-        const req = await Zotero.HTTP.request("GET", url, { responseType: "arraybuffer" });
-        const data = new Uint8Array(req.response || []);
+        const data = await this._readResource(url);
         const outPath = PathUtils.join(tmpDir, this._getHelperName());
         await IOUtils.write(outPath, data);
         if (!Zotero.isWin) {
@@ -222,8 +221,7 @@ class LlamaHelper {
         for (const name of list) {
             const url = EasyTrans.rootURI + "chrome/content/lib/" + plt + "/" + name;
             try {
-                const req = await Zotero.HTTP.request("GET", url, { responseType: "arraybuffer" });
-                const data = new Uint8Array(req.response || []);
+                const data = await this._readResource(url);
                 const outPath = PathUtils.join(tmpDir, name);
                 await IOUtils.write(outPath, data);
                 if (!Zotero.isWin) {
@@ -432,8 +430,7 @@ class LlamaHelper {
     async _getLibList(platform) {
         try {
             const url = EasyTrans.rootURI + "chrome/content/lib/manifest.json";
-            const req = await Zotero.HTTP.request("GET", url, { responseType: "text" });
-            const manifest = JSON.parse(req.response || req.responseText || "{}");
+            const manifest = JSON.parse(new TextDecoder().decode(await this._readResource(url)));
             const libs = manifest?.[platform];
             if (Array.isArray(libs) && libs.length > 0) {
                 return libs;
@@ -441,6 +438,23 @@ class LlamaHelper {
         } catch {}
 
         return this._getFallbackLibs(platform);
+    }
+
+    _readResource(url) {
+        return new Promise((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open("GET", url, true);
+            request.responseType = "arraybuffer";
+            request.onload = () => {
+                if (request.response && (request.status === 0 || (request.status >= 200 && request.status < 300))) {
+                    resolve(new Uint8Array(request.response));
+                } else {
+                    reject(new Error(`Failed to read local resource: ${url} (${request.status})`));
+                }
+            };
+            request.onerror = () => reject(new Error(`Failed to read local resource: ${url}`));
+            request.send();
+        });
     }
 
     _getFallbackLibs(platform) {

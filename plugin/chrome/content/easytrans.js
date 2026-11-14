@@ -157,7 +157,7 @@ var EasyTrans = {
 
         const modelPath = await this.modelDownloader.getModelPath();
 
-        if (!modelPath) {
+        if (!await this.modelDownloader.isModelDownloaded()) {
             throw new Error("Model not downloaded");
         }
 
@@ -791,23 +791,29 @@ var EasyTrans = {
                     button.disabled = true;
                     const originalLabel = button.textContent;
                     button.textContent = "Translating...";
+                    let stage = "initializing translation components";
                     try {
                         await self.initializeComponents();
                         const targetLang = Zotero.Prefs.get("extensions.easytrans.targetLanguage") || "zh-CN";
+                        stage = "translating text";
                         const translated = await self.translateText(selectionText, "auto", targetLang);
                         const normalized = self.normalizeTranslation(translated);
 
+                        stage = "saving annotation";
                         await self.createTranslationAnnotation(reader, params.annotation, normalized || translated, targetLang);
                         self.showTranslationPopup(doc, normalized || translated, targetLang);
                         if (self._refreshPane) {
                             self._refreshPane();
                         }
                     } catch (e) {
-                        Zotero.debug("EasyTrans: Selection translation failed - " + e.message);
+                        const detail = e?.message || String(e);
+                        const message = `Translation failed while ${stage}: ${detail}`;
+                        Zotero.debug("EasyTrans: " + message);
+                        Zotero.logError(e);
                         try {
-                            Services.prompt.alert(doc.defaultView, "EasyTrans Error", "Translation failed: " + e.message);
+                            Services.prompt.alert(doc.defaultView, "EasyTrans Error", message);
                         } catch (alertError) {
-                            self.showTranslationPopup(doc, "Translation failed: " + e.message, "error", true);
+                            self.showTranslationPopup(doc, message, "error", true);
                         }
                     } finally {
                         button.disabled = false;
